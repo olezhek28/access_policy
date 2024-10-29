@@ -5,3 +5,7 @@
 3. Более сложный пример использования rego, когда политика в файле
 4. Более сложный пример использования rego, когда политика в redis
 5. Более сложный пример использования rego + шаблоны, когда политика в redis, а атрибуты в postgres
+
+
+может запустить политику с выводом принтов
+opa eval -f raw -d permission_check.rego -i input.json 'data.permission_check.permissionsGranted'
