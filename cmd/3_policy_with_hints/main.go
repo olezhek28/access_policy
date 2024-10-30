@@ -83,7 +83,7 @@ func checkAccess(ctx context.Context, inputData map[string]interface{}) (bool, e
 		// Второй аргумент:
 		// Дополнительные опции загрузки, которые можно настроить, например,
 		// для включения и исключения определенных файлов. Можно передать nil, если нет особых требований.
-		rego.Load([]string{"./resource_check.rego"}, nil),
+		rego.Load([]string{"./resource_check_policy.tmpl"}, nil),
 	).
 		// Метод PrepareForEval используется для предварительной подготовки
 		// запроса, чтобы его можно было повторно использовать с разными входными

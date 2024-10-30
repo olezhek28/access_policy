@@ -1,0 +1,14 @@
+package resource_check
+
+default resourceCondition = false
+
+policy_resource := {
+	"source_uuid": "{{ .SourceUUID }}",
+    "source_slug": "{{ .SourceSlug }}"
+}
+
+resourceCondition {
+	policy_resource.source_uuid == input.source_uuid
+	policy_resource.source_slug == input.source_slug
+	print("Resource check passed")
+}

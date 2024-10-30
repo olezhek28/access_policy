@@ -1,0 +1,14 @@
+package permission_check
+
+default permissionsGranted = false
+
+required_permissions := { {{ range $i, $perm := .RequiredPermissions }}{{ if $i }}, {{ end }}"{{ $perm }}"{{ end }} }
+
+user_permissions_set := {perm | perm := lower(input.user_permissions[_])}
+
+missingPermissions := required_permissions - user_permissions_set
+
+permissionsGranted {
+    print(missingPermissions)
+    count(missingPermissions) == 0
+}

@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"text/template"
 
+	"github.com/brianvoe/gofakeit/v6"
 	"github.com/fatih/color"
 	"github.com/open-policy-agent/opa/rego"
 )
@@ -14,6 +17,13 @@ const (
 	permissionsGrantedKey = "permissions_granted"
 	missingPermissionsKey = "missing_permissions"
 )
+
+// PolicyData Данные для подстановки в шаблоны
+type PolicyData struct {
+	SourceUUID          string
+	SourceSlug          string
+	RequiredPermissions []string
+}
 
 type teatCase struct {
 	name  string
@@ -30,53 +40,70 @@ type result struct {
 func main() {
 	ctx := context.Background()
 
+	var (
+		sourceUUID = gofakeit.UUID()
+		sourceSlug = gofakeit.Word()
+	)
+
+	data := PolicyData{
+		SourceUUID:          sourceUUID,
+		SourceSlug:          sourceSlug,
+		RequiredPermissions: []string{"create", "read", "update", "delete"},
+	}
+
+	policies, err := generatePolicies(data)
+	if err != nil {
+		fmt.Printf("Ошибка при генерации политик: %v\n", err)
+		return
+	}
+
 	// Входные данные для проверки
 	inputData := []teatCase{
 		{
 			name: "Доступ разрешен, все параметры валидны",
 			input: map[string]interface{}{
-				"source_uuid":      "0FF8AFB4-55D2-4836-B17C-643AD59BBB2F",
-				"source_slug":      "some_slug",
-				"user_permissions": []string{"read", "write"},
+				"source_uuid":      sourceUUID,
+				"source_slug":      sourceSlug,
+				"user_permissions": []string{"create", "read", "update", "delete"},
 			},
 		},
 		{
 			name: "Доступ разрешен, все параметры валидны, но права не в том регистре",
 			input: map[string]interface{}{
-				"source_uuid":      "0FF8AFB4-55D2-4836-B17C-643AD59BBB2F",
-				"source_slug":      "some_slug",
-				"user_permissions": []string{"Read", "wRite"},
+				"source_uuid":      sourceUUID,
+				"source_slug":      sourceSlug,
+				"user_permissions": []string{"cReate", "Read", "updAte", "Delete"},
 			},
 		},
 		{
 			name: "Доступ запрещен, идентификатор ресурса не валиден",
 			input: map[string]interface{}{
 				"source_uuid":      "invalid_uuid",
-				"source_slug":      "some_slug",
-				"user_permissions": []string{"read", "write"},
+				"source_slug":      sourceSlug,
+				"user_permissions": []string{"create", "read", "update", "delete"},
 			},
 		},
 		{
 			name: "Доступ запрещен, slug ресурса не валиден",
 			input: map[string]interface{}{
-				"source_uuid":      "0FF8AFB4-55D2-4836-B17C-643AD59BBB2F",
+				"source_uuid":      sourceUUID,
 				"source_slug":      "invalid_slug",
-				"user_permissions": []string{"read", "write"},
+				"user_permissions": []string{"create", "read", "update", "delete"},
 			},
 		},
 		{
 			name: "Доступ запрещен, недостаточно прав доступа к ресурсу",
 			input: map[string]interface{}{
-				"source_uuid":      "0FF8AFB4-55D2-4836-B17C-643AD59BBB2F",
-				"source_slug":      "some_slug",
-				"user_permissions": []string{"write"},
+				"source_uuid":      sourceUUID,
+				"source_slug":      sourceSlug,
+				"user_permissions": []string{"read"},
 			},
 		},
 	}
 
-	for _, data := range inputData {
-		fmt.Printf(color.BlueString("Кейс: \"%s\":\n", data.name))
-		allowed, err := checkAccess(ctx, data)
+	for _, input := range inputData {
+		fmt.Printf(color.BlueString("Кейс: \"%s\":\n", input.name))
+		allowed, err := checkAccess(ctx, policies, input)
 		if err != nil {
 			fmt.Printf("Ошибка при проверке доступа: %v\n", err)
 			continue
@@ -97,10 +124,46 @@ func main() {
 
 		fmt.Println()
 	}
-
 }
 
-func checkAccess(ctx context.Context, testCase teatCase) (result, error) {
+func generatePolicies(data PolicyData) ([]string, error) {
+	// Генерация каждого файла
+	finalCheckPolicy, err := generatePolicy("final_check_policy.tmpl", data)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка генерации шаблона final_check_policy: %w", err)
+	}
+
+	permissionCheckPolicy, err := generatePolicy("permission_check_policy.tmpl", data)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка генерации шаблона permission_check_policy: %w", err)
+	}
+
+	resourceCheckPolicy, err := generatePolicy("resource_check_policy.tmpl", data)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка генерации шаблона resource_check_policy: %w", err)
+	}
+
+	return []string{finalCheckPolicy, permissionCheckPolicy, resourceCheckPolicy}, nil
+}
+
+func generatePolicy(templatePath string, data PolicyData) (string, error) {
+	// Загружаем шаблон из файла
+	tmpl, err := template.ParseFiles(templatePath)
+	if err != nil {
+		return "", fmt.Errorf("ошибка загрузки шаблона: %w", err)
+	}
+
+	// Применяем шаблон к данным
+	var output bytes.Buffer
+	err = tmpl.Execute(&output, data)
+	if err != nil {
+		return "", fmt.Errorf("ошибка выполнения шаблона: %w", err)
+	}
+
+	return output.String(), nil
+}
+
+func checkAccess(ctx context.Context, policies []string, testCase teatCase) (result, error) {
 	// Загружаем и компилируем объединённую политику
 	query, err := rego.New(
 		// Запрос к результату правила allow в пакете authorization.
@@ -112,15 +175,9 @@ func checkAccess(ctx context.Context, testCase teatCase) (result, error) {
 		// result:
 		// Именованное правило, в результате которого лежит финальный ответ по вопросу доступа.
 		rego.Query("data.final_check.result"),
-		// В отличие от rego.Module, который принимает политику как строку,
-		// rego.Load ищет и загружает Rego-файлы по заданным путям.
-		// Это полезно для организации больших проектов, где политики хранятся в отдельных файлах.
-		// Первый аргумент:
-		// Имя файлов с политиками.
-		// Второй аргумент:
-		// Дополнительные опции загрузки, которые можно настроить, например,
-		// для включения и исключения определенных файлов. Можно передать nil, если нет особых требований.
-		rego.Load([]string{"./resource_check_policy.tmpl", "./permission_check_policy.tmpl", "./final_check_policy.tmpl"}, nil),
+		rego.Module("final_check_policy.rego", policies[0]),
+		rego.Module("permission_check_policy.rego", policies[1]),
+		rego.Module("resource_check_policy.rego", policies[2]),
 	).
 		// Метод PrepareForEval используется для предварительной подготовки
 		// запроса, чтобы его можно было повторно использовать с разными входными
